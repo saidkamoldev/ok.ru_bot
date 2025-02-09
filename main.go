@@ -1,234 +1,183 @@
 // package main
 
 // import (
-// 	"encoding/json"
 // 	"fmt"
-// 	"io/ioutil"
+// 	"log"
+// 	"strings"
+
+// 	"github.com/gocolly/colly"
+// )
+
+// // OK.ru sahifa URL'si
+// const okGroupURL = "https://ok.ru/group/70000034205196" // Guruh ID'sini o‘zingizga moslang
+
+// func main() {
+// 	// Colly collector yaratish
+// 	c := colly.NewCollector()
+
+// 	// Sahifa ichidagi postlarni yig‘ish
+// 	c.OnHTML("div.media-text", func(e *colly.HTMLElement) {
+// 		postText := strings.TrimSpace(e.Text)
+// 		fmt.Println("Post:", postText)
+// 	})
+
+// 	// Sahifani ochish
+// 	err := c.Visit(okGroupURL)
+// 	if err != nil {
+// 		log.Fatal("Sahifani ochib bo‘lmadi:", err)
+// 	}
+// }
+// package main
+
+// import (
+// 	"encoding/json"
+// 	// "fmt"
 // 	"log"
 // 	"net/http"
 // 	"strings"
 // 	"time"
+
+// 	"github.com/gocolly/colly"
+// 	"github.com/gorilla/websocket"
 // )
 
-// // Telegram bot token va kanal ID
-// const botToken = "6739271319:AAFZ2WzM1wI5CPb7qL7XqU3lKgnLHhQoalg"
-// const chatID = "-1001871864851"
+// // OK.ru sahifa URL'si
+// const okGroupURL = "https://ok.ru/group/70000034205196"
 
-// // OK.ru guruh sahifasi va access token
-// const okGroupURL = "https://api.ok.ru/group/70000034205196/messages"
-// const accessToken = "-n-2ymYnH6EEo3Xs9hIgvk8Ku7udTeT5Z2M8E0Q0BgTsRI03wBey8RLPwc2iu07WsBMG4dUHnT48ptX4iA90:CMBDJQLGDIHBABABA"
-
-// // OK.ru guruhidan yangi postlarni olish
-// type OKPost struct {
-// 	ID   string `json:"id"`
-// 	Text string `json:"text"`
+// // Post tuzilmasi
+// type Post struct {
+// 	Text     string `json:"text"`
+// 	ImageURL string `json:"image_url"`
 // }
 
-// // OK.ru guruhidan postlarni olish
-// func getOKPosts() ([]OKPost, error) {
-// 	url := fmt.Sprintf("%s?access_token=%s", okGroupURL, accessToken)
-
-// 	resp, err := http.Get(url)
-// 	if err != nil {
-// 		log.Println("OK.ru sahifasini ochib bo‘lmadi:", err)
-// 		return nil, err
-// 	}
-// 	defer resp.Body.Close()
-
-// 	if resp.StatusCode != http.StatusOK {
-// 		log.Printf("API so‘rovi xato berdi: %d %s", resp.StatusCode, resp.Status)
-// 		return nil, fmt.Errorf("API xatosi: %s", resp.Status)
-// 	}
-
-// 	body, err := ioutil.ReadAll(resp.Body)
-// 	if err != nil {
-// 		log.Println("Javobni o‘qishda xato:", err)
-// 		return nil, err
-// 	}
-
-// 	// API javobini konsolga chiqarish
-// 	fmt.Println("API javobi:", string(body))
-
-// 	var posts []OKPost
-// 	err = json.Unmarshal(body, &posts)
-// 	if err != nil {
-// 		log.Println("JSONni parse qilishda xato:", err)
-// 		return nil, err
-// 	}
-
-// 	return posts, nil
+// // WebSocket uchun upgrader
+// var upgrader = websocket.Upgrader{
+// 	CheckOrigin: func(r *http.Request) bool { return true },
 // }
 
-// // Telegramga xabar yuborish
-// func sendToTelegram(message string) {
-// 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
-// 	data := fmt.Sprintf(`{"chat_id":"%s","text":"%s"}`, chatID, message)
+// var clients = make(map[*websocket.Conn]bool) // Barcha WebSocket ulanishlari
 
-// 	req, err := http.NewRequest("POST", url, strings.NewReader(data))
+// // Oxirgi postni olish funksiyasi
+// func getLatestPost() (Post, error) {
+// 	c := colly.NewCollector()
+// 	var latestPost Post
+
+// 	// Post matnini olish
+// 	c.OnHTML("div.media-text", func(e *colly.HTMLElement) {
+// 		if latestPost.Text == "" {
+// 			latestPost.Text = strings.TrimSpace(e.Text)
+// 		}
+// 	})
+
+// 	// Postdagi rasmni olish
+// 	c.OnHTML("img", func(e *colly.HTMLElement) {
+// 		imgSrc := e.Attr("src")
+// 		if latestPost.ImageURL == "" {
+// 			latestPost.ImageURL = imgSrc
+// 		}
+// 	})
+
+// 	// Sahifani ochish
+// 	err := c.Visit(okGroupURL)
 // 	if err != nil {
-// 		log.Println("So‘rovni yaratishda xato:", err)
+// 		return latestPost, err
+// 	}
+
+// 	return latestPost, nil
+// }
+
+// // WebSocket handler
+// func handleConnections(w http.ResponseWriter, r *http.Request) {
+// 	ws, err := upgrader.Upgrade(w, r, nil)
+// 	if err != nil {
+// 		log.Println("WebSocket ulanishda xato:", err)
 // 		return
 // 	}
-// 	req.Header.Set("Content-Type", "application/json")
+// 	defer ws.Close()
 
-// 	client := &http.Client{}
-// 	resp, err := client.Do(req)
-// 	if err != nil {
-// 		log.Println("Telegramga yuborib bo‘lmadi:", err)
-// 		return
+// 	clients[ws] = true // Yangi mijozni qo'shish
+
+// 	for {
+// 		// Mijoz WebSocketni yopganda, uni o‘chiramiz
+// 		_, _, err := ws.ReadMessage()
+// 		if err != nil {
+// 			delete(clients, ws)
+// 			break
+// 		}
 // 	}
-// 	defer resp.Body.Close()
+// }
 
-// 	if resp.StatusCode != http.StatusOK {
-// 		log.Printf("Telegramga yuborilgan xato: %s", resp.Status)
-// 	} else {
-// 		log.Println("Xabar Telegramga muvaffaqiyatli yuborildi!")
+// // WebSocket orqali yangi postlarni jo'natish
+// func sendUpdates() {
+// 	var lastPost Post
+
+// 	for {
+// 		post, err := getLatestPost()
+// 		if err != nil {
+// 			log.Println("Postlarni olishda xato:", err)
+// 		} else if post.Text != lastPost.Text {
+// 			log.Println("Yangi post aniqlandi:", post.Text)
+
+// 			// WebSocket orqali barcha mijozlarga yangi postni jo‘natish
+// 			postJSON, _ := json.Marshal(post)
+// 			for client := range clients {
+// 				err := client.WriteMessage(websocket.TextMessage, postJSON)
+// 				if err != nil {
+// 					log.Println("WebSocket jo‘natishda xato:", err)
+// 					client.Close()
+// 					delete(clients, client)
+// 				}
+// 			}
+// 			lastPost = post
+// 		}
+
+// 		time.Sleep(10 * time.Second) // 10 soniyadan keyin yana tekshirish
 // 	}
 // }
 
 // func main() {
-// 	for {
-// 		// OK.ru guruhidan postlarni olish
-// 		posts, err := getOKPosts()
-// 		if err != nil {
-// 			log.Println("Postlarni olishda xato:", err)
-// 			time.Sleep(5 * time.Minute) // Xatolik bo‘lsa, 5 daqiqa kutish
-// 			continue
-// 		}
+// 	// WebSocket server
+// 	http.HandleFunc("/ws", handleConnections)
 
-// 		// Yangi postlarni tekshirish
-// 		for _, post := range posts {
-// 			if strings.Contains(post.Text, "yangi post") { // Bu yerda o‘zingiz xohlagan filtrni qo‘shing
-// 				log.Println("Yangi post topildi:", post.Text)
-// 				sendToTelegram(fmt.Sprintf("OK.ru guruhida yangi post bor! 🔥\n%s", post.Text))
-// 			} else {
-// 				log.Println("Yangi post topilmadi:", post.Text)
-// 			}
-// 		}
+// 	// WebSocket serverni ishga tushirish
+// 	go sendUpdates()
 
-//			// Har 5 daqiqada yana tekshirib ko‘rish
-//			time.Sleep(5 * time.Minute)
-//		}
-//	}
+// 	log.Println("WebSocket server 8080-portda ishlayapti...")
+// 	err := http.ListenAndServe(":8080", nil)
+// 	if err != nil {
+// 		log.Fatal("Serverni ishga tushirib bo‘lmadi:", err)
+// 	}
+// }
+
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
-	"log"
-	"net/http"
-	// "os"
-	"strings"
-	"time"
+
+
+	"example.com/ok_bot/scraper"
+	"example.com/ok_bot/telegram"
+	"example.com/ok_bot/websocket"
+	// "OK_Bot_Project/scraper"
+	// "OK_Bot_Project/telegram"
+	// "OK_Bot_Project/websocket"
 )
 
-// Telegram bot token va kanal ID
-const botToken = "6739271319:AAFZ2WzM1wI5CPb7qL7XqU3lKgnLHhQoalg"
-const chatID = "-1001871864851"
-const accessToken = "-n-2ymYnH6EEo3Xs9hIgvk8Ku7udTeT5Z2M8E0Q0BgTsRI03wBey8RLPwc2iu07WsBMG4dUHnT48ptX4iA90:CMBDJQLGDIHBABABA"
-
-// OK.ru guruh sahifasi va access token
-const okGroupURL = "https://api.ok.ru/group/70000034205196/messages"
-
-// OK.ru guruhidan yangi postlarni olish
-type OKPost struct {
-	ID   string `json:"id"`
-	Text string `json:"text"`
-}
-
-// OK.ru guruhidan postlarni olish
-func getOKPosts() ([]OKPost, error) {
-	url := fmt.Sprintf("%s?access_token=%s&count=1", okGroupURL, accessToken)
-
-	resp, err := http.Get(url)
-	if err != nil {
-		log.Println("OK.ru sahifasini ochib bo‘lmadi:", err)
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("API so‘rovi xato berdi: %d %s", resp.StatusCode, resp.Status)
-		return nil, fmt.Errorf("API xatosi: %s", resp.Status)
-	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Println("Javobni o‘qishda xato:", err)
-		return nil, err
-	}
-
-	// API javobini konsolga chiqarish
-	fmt.Println("API javobi:", string(body))
-
-	var posts []OKPost
-	err = json.Unmarshal(body, &posts)
-	if err != nil {
-		log.Println("JSONni parse qilishda xato:", err)
-		return nil, err
-	}
-
-	return posts, nil
-}
-
-// Telegramga xabar yuborish
-func sendToTelegram(message string) {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
-	data := fmt.Sprintf(`{"chat_id":"%s","text":"%s"}`, chatID, message)
-
-	req, err := http.NewRequest("POST", url, strings.NewReader(data))
-	if err != nil {
-		log.Println("So‘rovni yaratishda xato:", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Println("Telegramga yuborib bo‘lmadi:", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Telegramga yuborilgan xato: %s", resp.Status)
-	} else {
-		log.Println("Xabar Telegramga muvaffaqiyatli yuborildi!")
-	}
-}
-
-// Postlar orasida o'zgarishni aniqlash uchun ID saqlash
-var lastPostID string
-
-// Yangi postlarni tekshirish va yuborish
-func checkAndSendPosts(posts []OKPost) {
-	for _, post := range posts {
-		if post.ID != lastPostID {
-			log.Println("Yangi post topildi:", post.Text)
-			sendToTelegram(fmt.Sprintf("OK.ru guruhida yangi post bor! 🔥\n%s", post.Text))
-			lastPostID = post.ID // So'nggi post ID'sini saqlash
-		} else {
-			log.Println("Yangi post topilmadi:", post.Text)
-		}
-	}
-}
-
 func main() {
-	for {
-		// OK.ru guruhidan postlarni olish
-		posts, err := getOKPosts()
-		if err != nil {
-			log.Println("Postlarni olishda xato:", err)
-			time.Sleep(5 * time.Minute) // Xatolik bo‘lsa, 5 daqiqa kutish
-			continue
-		}
 
-		// Yangi postlarni tekshirish
-		checkAndSendPosts(posts)
+	
+	// Telegram botni ishga tushirish
+	telegram.InitBot("6739271319:AAFZ2WzM1wI5CPb7qL7XqU3lKgnLHhQoalg")
+	go telegram.StartTelegramBot()
 
-		// Har 5 daqiqada yana tekshirib ko‘rish
-		time.Sleep(5 * time.Minute)
+	// WebSocket serverni ishga tushirish
+	go websocket.StartWebSocketServer()
+
+	// Scraperni ishga tushirish
+	newPostChan := make(chan scraper.Post)
+	go scraper.StartScraper(newPostChan)
+
+	for post := range newPostChan {
+		telegram.SendPostToAdmin(post)
 	}
 }
+	
